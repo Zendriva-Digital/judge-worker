@@ -4,6 +4,10 @@ import { runJudge } from "@/libs/go-judge";
 
 const BACKEND_URL = process.env.BACKEND_URL!;
 const INTERNAL_KEY = process.env.INTERNAL_API_KEY!;
+console.log("[WORKER ENV]", {
+	BACKEND_URL: process.env.BACKEND_URL,
+	INTERNAL_API_KEY: process.env.INTERNAL_API_KEY,
+});
 
 const MAX_CONCURRENT = 2;
 let running = 0;
@@ -49,8 +53,10 @@ async function sendResult(result: {
 }
 
 async function processSubmission(id: string) {
+	console.log("[WORKER] fetch submission:", id);
 	const job = await fetchSubmission(id);
-
+	console.log("[WORKER] fetched submission:", job.submissionId);
+	console.log("[WORKER] compiling...");
 	const compile = await runJudge({
 		cmd: [
 			{
@@ -74,6 +80,7 @@ async function processSubmission(id: string) {
 	});
 
 	if (compile.status !== "Accepted" || !compile.fileIds) {
+		console.log("[WORKER] compile failed");
 		await sendResult({
 			submissionId: id,
 			status: "CE",
@@ -88,15 +95,27 @@ async function processSubmission(id: string) {
 	let maxMemory = 0;
 
 	for (const tc of job.testcases) {
+		console.log("[WORKER] running testcase");
+
 		const result = await runJudge({
+			
 			cmd: [
 				{
 					args: ["main"],
 					env: ["PATH=/usr/bin:/bin"],
 					files: [
-						{ content: tc.input },
-						{ name: "stdout", max: 10240 },
-						{ name: "stderr", max: 10240 },
+						{
+							name: "stdin",
+							content: tc.input,
+						},
+						{
+							name: "stdout",
+							max: 10240,
+						},
+						{
+							name: "stderr",
+							max: 10240,
+						},
 					],
 					timeout: 5000000000,
 					cpuLimit: 1000000000,
@@ -105,9 +124,14 @@ async function processSubmission(id: string) {
 					copyIn: {
 						main: { fileId: compile.fileIds["main"] },
 					},
+					copyOut: ["stdout", "stderr"],
 				},
 			],
 		});
+		
+		console.log("[DEBUG FULL RESULT]", JSON.stringify(result, null, 2));
+		console.log("[DEBUG] stdout:", JSON.stringify(result.files?.stdout));
+		console.log("[DEBUG] expected:", JSON.stringify(tc.output));
 
 		if (result.status === "Time Limit Exceeded") {
 			finalStatus = "TLE";
@@ -121,7 +145,8 @@ async function processSubmission(id: string) {
 			finalStatus = "RE";
 			break;
 		}
-		if ((result.stdout ?? "").trim() !== tc.output.trim()) {
+		const stdout = result.files?.stdout ?? "";
+		if (stdout.trim() !== tc.output.trim()) {
 			finalStatus = "WA";
 			break;
 		}
@@ -129,6 +154,7 @@ async function processSubmission(id: string) {
 		maxTime = Math.max(maxTime, result.time ?? 0);
 		maxMemory = Math.max(maxMemory, result.memory ?? 0);
 	}
+	console.log("[WORKER] final status:", finalStatus);
 
 	await sendResult({
 		submissionId: id,
@@ -148,6 +174,7 @@ async function start() {
 		}
 
 		const submissionId = await redis.lpop("judge:queue");
+		console.log("[WORKER POP]", submissionId);
 		if (!submissionId) {
 			await new Promise((r) => setTimeout(r, 100));
 			continue;

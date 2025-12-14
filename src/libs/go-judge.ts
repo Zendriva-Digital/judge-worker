@@ -8,6 +8,10 @@ export interface JudgeResult {
 	stderr?: string;
 	error?: string;
 	fileIds?: Record<string, string>;
+    files?: {
+		stdout?: string;
+		stderr?: string;
+	};
 }
 
 function isJudgeResult(data: unknown): data is JudgeResult {
